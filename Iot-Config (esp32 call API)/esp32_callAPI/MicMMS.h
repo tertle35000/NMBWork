@@ -1,0 +1,58 @@
+#ifndef MICMMS_H
+#define MICMMS_H
+/*------------------- Information Program -------------------*/
+//  MicMMS version 2.0.3  (Version code)
+/*----------------------------------------------------------*/
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include "ModbusRtu.h"
+#include <vector>
+#include <ArduinoJson.h>
+// ---- เพิ่มไลบรารี 2 ตัวนี้เข้ามาใหม่ ----
+#include <LittleFS.h>
+#include <HTTPClient.h>
+// ----------------------------------
+
+class MicMMS {
+private:
+  const char* ssid;
+  const char* password;
+  const char* mqtt_server;
+  int mqtt_port;
+  const char* dp_name;
+  const char* mac_no;
+  const char* vrs_code;
+  WiFiClient wifiClient;
+  PubSubClient mqttClient;
+
+  int slaveId;
+  HardwareSerial& serialPort;
+  Modbus modbus;
+
+  IPAddress ip;
+  IPAddress gateway;
+  IPAddress subnet;
+public:
+  MicMMS(const char* ssid, const char* password, const char* mqtt_server, int mqtt_port, const char* dp_name, const char* mac_no, int slaveId, HardwareSerial& serialPort, const char* ip_address, const char* gateway_address, const char* subnet_mask, const char* vrs_code);
+  void printHeap();
+  void setupWiFi();
+  void init();
+  void reconnect();
+  bool publishMessage(char* topic, const char* message);
+  void callback(char* topic, byte* payload, unsigned int length); // <-- อย่าลืมบรรทัดนี้ครับ
+  void run();
+  void start();
+  void callAPI(); // ---- เพิ่มการประกาศฟังก์ชันใหม่ตรงนี้ ----
+
+  static void modbus_Task(void* pvParam);
+  static void Network_Task(void* pvParam);
+  static void func1_Task(void* pvParam);
+  static void func2_Task(void* pvParam);
+  static void func3_Task(void* pvParam);
+  static void broke_modbus_Task(void* pvParam);
+  static void esp_Task(void* pvParam);
+};
+
+#endif
