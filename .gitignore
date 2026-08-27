@@ -1,0 +1,20 @@
+# Claude Code session files (local only)
+.claude/
+
+# Build artifacts
+build/
+.pio/
+*.o
+*.bin
+*.elf
+
+# Editor/OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
