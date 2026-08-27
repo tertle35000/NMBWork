@@ -1,0 +1,155 @@
+
+services:
+  mms_app:
+    build:
+      context: .  
+      dockerfile: Dockerfile
+    environment:
+      - TZ=Asia/Bangkok
+    image: "mic/mms_app:2.0.11"
+    container_name: 'streamlit${NO}'
+    privileged: true
+    volumes:
+      - ./telegraf.conf:/app/telegraf.conf
+      - ./config.ini:/app/config.ini
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.env:/app/.env
+    ports:
+      - '${ST_PORT}:8501'
+    env_file:
+      - .env
+    command: ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+
+  mms_data:
+    image: "mic/mms_app:2.0.11"
+    container_name: 'mms_data${NO}'
+    privileged: true
+    volumes:
+      - ./.env:/app/.env
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Bangkok
+    command: ["python", "main_data.py"]
+    
+  mms_status:
+    image: "mic/mms_app:2.0.11"
+    container_name: 'mms_status${NO}'
+    privileged: true
+    volumes:
+      - ./.env:/app/.env
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Bangkok
+    command: ["python", "main_status.py"]
+
+  mms_alarm:
+    image: "mic/mms_app:2.0.11"
+    container_name: 'mms_alarm${NO}'
+    privileged: true
+    volumes:
+      - ./.env:/app/.env
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Bangkok
+    command: ["python", "main_alarm.py"] 
+
+  auto_drop:
+    image: "mic/mms_app:2.0.11"
+    container_name: 'auto_drop${NO}'
+    privileged: true
+    volumes:
+      - ./.env:/app/.env
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Bangkok
+    command: ["python", "autodrop.py"] 
+
+  iot_monitor:
+    image: "mic/mms_app:2.0.11"
+    container_name: 'iot_monitor${NO}'
+    privileged: true
+    volumes:
+      - ./.env:/app/.env
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Bangkok
+    command: ["python", "monitor.py"] 
+    
+  add_external_data:
+    image: "mic/mms_app:2.0.11"
+    container_name: 'add_external_data${NO}'
+    privileged: true
+    volumes:
+      - ./.env:/app/.env
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Bangkok
+    command: ["python", "add_data.py"] 
+  telegraf_mms:
+    image: telegraf
+    privileged: true
+    container_name: 'telegraf_mms${NO}'
+    restart: always
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    ports:
+      - '${TG_PORT}:8125'
+    env_file:
+      - .env
+
+  influxdb_mms:
+    image: influxdb:1.8-alpine
+    container_name: 'influxdb_mms${NO}'
+    restart: always
+    environment:
+      - INFLUXDB_DB=influx
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=admin
+      - TZ=Asia/Bangkok
+    env_file:
+      - .env
+    ports:
+      - '${INFLUX_PORT}:8086'
+    volumes:
+      # - '/home/influxdb_data${NO}:/var/lib/influxdb'
+      - './influxdb_data${NO}:/var/lib/influxdb'
+
+  ofelia:
+    image: mcuadros/ofelia:latest
+    privileged: true
+    container_name: 'ofelia${NO}'
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config.ini:/etc/ofelia/config.ini
+    env_file:
+      - .env
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    restart: always
+    ports:
+      - 3000:3000
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  grafana_data:
+  influxdb_data1:
+    driver_opts:
+      type: none
+      # device: '/home/influxdb_data${NO}'
+      device: './influxdb_data${NO}'
+      o: bind
+
+
