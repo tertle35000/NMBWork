@@ -9,7 +9,7 @@ from db import get_latest_config, init_db
 app = FastAPI(title="ESP32 Configuration API")
 
 # สร้างตาราง config_versions ถ้ายังไม่มี (idempotent) — deploy ไปเครื่องใหม่แล้ว schema พร้อมใช้ทันที
-# (ข้อมูลจริงต้อง migrate/เขียนเพิ่มเองอีกที ดู migrate_config_files.py สำหรับย้ายของเก่าจากไฟล์ mic/*.json)
+# (ข้อมูลจริงอยู่ใน config.db เท่านั้น ไม่มีไฟล์ .json เป็น source แล้ว ต้องเอาไฟล์ config.db ไปเองตอน deploy)
 init_db()
 
 

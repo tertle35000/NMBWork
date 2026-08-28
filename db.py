@@ -19,7 +19,8 @@ def get_connection() -> sqlite3.Connection:
 def init_db() -> None:
     """สร้างตารางถ้ายังไม่มี — เรียกได้ซ้ำ ๆ ปลอดภัย (idempotent)
     เรียกตอน Api.py เริ่มทำงาน เพื่อให้ deploy ไปเครื่องใหม่แล้ว schema พร้อมใช้ทันที
-    (ข้อมูลจริงยังต้อง migrate/เขียนเพิ่มเองอีกที ไฟล์ .db เปล่า ๆ ไม่มีข้อมูลอะไรอยู่)
+    (ไม่มีไฟล์ .json เป็น source แล้ว — ถ้า config.db ที่ deploy ไปเป็นไฟล์เปล่า ต้องเอาข้อมูลเข้าเอง
+    ผ่าน insert_new_version() หรือ copy ไฟล์ config.db ที่มีข้อมูลอยู่แล้วไปแทนที่)
     """
     conn = get_connection()
     try:
