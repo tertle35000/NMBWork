@@ -1,16 +1,18 @@
 """
 Streamlit UI สำหรับแก้ไข/ดู config ของ ESP32 แต่ละ department/process
-ต้องรัน Api.py (FastAPI) แยกไว้ก่อน ที่ http://localhost:8000
+ต้องรัน Api.py (FastAPI) แยกไว้ก่อน — จะรันเครื่องเดียวกันหรือคนละเครื่องกับ UI นี้ก็ได้
+(ปรับ URL ได้จากช่อง sidebar ตอนรัน หรือ set env var CONFIG_API_URL ไว้ล่วงหน้าก็ได้)
 
 รันด้วย: streamlit run ui_streamlit.py
 """
 import json
+import os
 
 import pandas as pd
 import requests
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000"
+DEFAULT_API_BASE_URL = os.environ.get("CONFIG_API_URL", "http://localhost:8000")
 
 # ต้องตรงกับ MAX_ROWS/MAX_ADDRESS/MAX_PAYLOAD_BYTES/MAX_MQTT_DATA_PAYLOAD_BYTES ใน Api.py
 # (แสดงผลฝั่ง UI ให้ user เห็นก่อนกด submit เพื่อ feedback ไว แต่ตัวที่ "เชื่อได้จริง" คือ backend validate
@@ -52,6 +54,17 @@ def estimate_mqtt_data_payload_bytes(rows: list) -> int:
 
 st.set_page_config(page_title="ESP32 Config Manager", layout="wide")
 st.title("ESP32 Config Manager")
+
+# ให้ปรับ backend URL ได้จากหน้าเว็บเลย เผื่อสลับไปมาระหว่างรัน Api.py เครื่องเดียวกับ UI (localhost)
+# กับรันคนละเครื่อง (เช่น backend จริงอยู่ที่ .204 ส่วน UI รันเครื่องนี้)
+with st.sidebar:
+    st.subheader("Backend connection")
+    API_BASE_URL = st.text_input("API base URL", value=DEFAULT_API_BASE_URL).rstrip("/")
+    try:
+        health = requests.get(f"{API_BASE_URL}/docs", timeout=3)
+        st.success(f"เชื่อม backend ได้ ({API_BASE_URL})")
+    except requests.exceptions.RequestException:
+        st.error(f"เชื่อม backend ที่ {API_BASE_URL} ไม่ได้ — เช็ค Api.py รันอยู่มั้ย/firewall เครื่องปลายทาง")
 
 tab_edit, tab_view = st.tabs(["แก้ไข Config", "ดู Config"])
 
