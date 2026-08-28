@@ -562,7 +562,12 @@ void MicMMS::esp_Task(void* pvParam) {
 // ใช้ร่วมกันทั้งตอนโหลดจาก API สด ๆ และตอน fallback จาก cache "/config.json" (โครงสร้างไฟล์เดียวกัน)
 // outApiVersion จะถูกตั้งค่าเป็น api_version ที่อ่านได้ (-1 ถ้าไม่มีฟิลด์นี้), คืน false ถ้า parse ไม่ผ่าน
 bool MicMMS::loadDefTbFromJson(const String& jsonPayload, long& outApiVersion) {
-  StaticJsonDocument<2048> doc;
+  // 4096 = พื้นที่ parse ผลลัพธ์ JSON หลังแตกเป็น object/array แล้ว (ไม่ใช่ขนาด jsonPayload ดิบตรง ๆ
+  // เพราะ ArduinoJson เก็บ string ซ้ำ + overhead ต่อ key-value pair เพิ่มด้วย ดังนั้น jsonPayload ดิบ
+  // ที่ parse ผ่านได้จริงจะเล็กกว่า 4096 byte เสมอ) — ค่านี้ผูกกับ callAPI() ที่รันบน stack ของ
+  // setup()/loop() task (default ~8192 byte) เช็คระยะขอบจาก Serial log "callAPI stack remaining"
+  // ด้านล่างทุกครั้งหลัง flash ใหม่ ถ้าเหลือน้อยเกินไปให้ลดตัวเลขนี้ลง
+  StaticJsonDocument<4096> doc;
   DeserializationError error = deserializeJson(doc, jsonPayload);
 
   if (error || !doc.is<JsonObject>() || !doc["data"].is<JsonArray>()) {
@@ -659,7 +664,7 @@ void MicMMS::callAPI() {
     HTTPClient http;
 
     // *** ใส่ URL ของ FastAPI ตรงนี้ครับ ***
-    String apiUrl = "http://192.168.0.188:8000/api/config/" + department + "/" + process + "?mac=" + WiFi.macAddress();
+    String apiUrl = "http://192.168.0.204:8000/api/config/" + department + "/" + process + "?mac=" + WiFi.macAddress();
     Serial.printf("API URL: %s\n", apiUrl.c_str());
 
     // เชื่อมรอบแรกไม่ติด (เน็ตสะดุด/server ช้าชั่วคราว) ให้ลองซ้ำอีก 1 ครั้งก่อนค่อยถือว่า fail จริง
@@ -822,5 +827,9 @@ void MicMMS::callAPI() {
   Serial.printf("callAPI additional stack use: %u bytes\n", additionalStackUsed);
   Serial.printf("callAPI free heap after: %u bytes\n", freeHeapAfter);
   Serial.printf("callAPI minimum free heap: %u bytes\n", minFreeHeapAfter);
+  // ค่านี้คือระยะขอบ stack ที่เหลือ "แย่ที่สุดเท่าที่เคยเหลือ" ของ task นี้ตั้งแต่เริ่มรัน (ไม่ใช่แค่ตอน
+  // callAPI() นี้อย่างเดียว) ถ้าเลขนี้ใกล้ 0 แปลว่า StaticJsonDocument<4096> ใน loadDefTbFromJson()
+  // เสี่ยง stack overflow ให้ลดขนาดลง (ดูคอมเมนต์ที่ตัวแปร doc)
+  Serial.printf("callAPI stack remaining (worst-case since boot): %u bytes\n", stackWatermarkAfter * sizeof(StackType_t));
   Serial.println("--- End Dynamic Config Flow ---");
 }

@@ -19,5 +19,5 @@ __pycache__/
 .venv/
 venv/
 
-# SQLite DB (ข้อมูลจริง — generate ได้จาก migrate_config_files.py, ไม่ commit ตัวไฟล์ .db)
-*.db
+# หมายเหตุ: config.db (SQLite) ตั้งใจ commit ไว้ในนี้เลย ไม่ ignore แล้ว — ใช้เป็นตัวข้อมูลตั้งต้น/ตัวเทส
+# ร่วมกับ ESP32 จริง (ต้องระวังเรื่อง merge conflict แบบ binary ถ้ามีคนแก้พร้อมกันหลายจุด/หลายเครื่อง)
