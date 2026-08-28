@@ -620,64 +620,156 @@ void MicMMS::callAPI() {
   bool loaded = false;
   long localApiVersion = api_version.toInt();
 
+  // dp_name รูปแบบ "/Department/Process/" เช่น "/mic/demo1/" -> department="mic", process="demo1"
+  String dpPath = String(dp_name);
+  if (dpPath.startsWith("/")) dpPath.remove(0, 1);
+  if (dpPath.endsWith("/")) dpPath.remove(dpPath.length() - 1, 1);
+  int slashIdx = dpPath.indexOf('/');
+  String department = (slashIdx >= 0) ? dpPath.substring(0, slashIdx) : dpPath;
+  String process = (slashIdx >= 0) ? dpPath.substring(slashIdx + 1) : "";
+  String currentDpKey = department + "/" + process;  // เช่น "mic/demo1"
+  Serial.printf("Department: %s | Process: %s\n", department.c_str(), process.c_str());
+
+  // --- เช็คว่า cache ที่มีอยู่ (ถ้ามี) เป็นของ department/process เดียวกับตอนนี้หรือไม่ ---
+  // กันกรณีย้ายกล่องไปอีก process แล้ว cache/เลข version เก่าของ process เดิม (ที่อาจสูงกว่า) มาบัง
+  // ทำให้ ESP32 เข้าใจผิดว่า "server ไม่มีอะไรใหม่" ทั้งที่จริง ๆ ต้องดึง config ของ process ใหม่มาแทนที่
+  String cachedDpKey = "";
+  if (LittleFS.exists("/dp_name.txt")) {
+    File dpFile = LittleFS.open("/dp_name.txt", "r");
+    if (dpFile) {
+      cachedDpKey = dpFile.readString();
+      cachedDpKey.trim();
+      dpFile.close();
+    }
+  }
+  // หมายเหตุ: ถ้ายังไม่เคยมี /dp_name.txt เลย (cachedDpKey == "") ให้ถือว่า "ไม่รู้ว่า cache เดิมเป็นของ
+  // process ไหน" แล้วบังคับ dpChanged = true ไปเลย (ไม่ใช่ปล่อยผ่านว่าเหมือนเดิม) เพราะ /dp_name.txt จะถูกเขียน
+  // ก็ต่อเมื่อเข้าเงื่อนไขนี้เท่านั้น -- ถ้าปล่อยผ่านจะกลายเป็นไก่กับไข่: ไม่มีไฟล์ทำให้ไม่ trigger, ไม่ trigger ทำให้ไม่มีไฟล์ตลอดไป
+  bool dpChanged = (cachedDpKey != currentDpKey);
+  if (dpChanged) {
+    if (cachedDpKey.length() == 0) {
+      Serial.println("No previous department/process record found (/dp_name.txt missing), forcing config refresh to establish baseline.");
+    } else {
+      Serial.printf("Department/Process changed (cached: %s -> current: %s). Forcing config refresh regardless of api_version.\n",
+                    cachedDpKey.c_str(), currentDpKey.c_str());
+    }
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
 
-    // dp_name รูปแบบ "/Department/Process/" เช่น "/mic/demo1/" -> department="mic", process="demo1"
-    String dpPath = String(dp_name);
-    if (dpPath.startsWith("/")) dpPath.remove(0, 1);
-    if (dpPath.endsWith("/")) dpPath.remove(dpPath.length() - 1, 1);
-    int slashIdx = dpPath.indexOf('/');
-    String department = (slashIdx >= 0) ? dpPath.substring(0, slashIdx) : dpPath;
-    String process = (slashIdx >= 0) ? dpPath.substring(slashIdx + 1) : "";
-    Serial.printf("Department: %s | Process: %s\n", department.c_str(), process.c_str());
-
     // *** ใส่ URL ของ FastAPI ตรงนี้ครับ ***
     String apiUrl = "http://192.168.0.188:8000/api/config/" + department + "/" + process + "?mac=" + WiFi.macAddress();
-    http.begin(apiUrl);
-
-    int httpCode = http.GET();
     Serial.printf("API URL: %s\n", apiUrl.c_str());
-    Serial.printf("API HTTP code: %d\n", httpCode);
+
+    // เชื่อมรอบแรกไม่ติด (เน็ตสะดุด/server ช้าชั่วคราว) ให้ลองซ้ำอีก 1 ครั้งก่อนค่อยถือว่า fail จริง
+    const int maxAttempts = 2;
+    int httpCode = -1;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      http.begin(apiUrl);
+      httpCode = http.GET();
+      Serial.printf("API HTTP code (attempt %d/%d): %d\n", attempt, maxAttempts, httpCode);
+      if (httpCode == HTTP_CODE_OK) break;
+      http.end();
+      if (attempt < maxAttempts) {
+        Serial.println("API call failed, retrying once more...");
+        delay(1000);  // เว้นจังหวะก่อน retry กันยิงรัว ๆ ตอนเน็ต/server กำลังสะดุด
+      }
+    }
 
     if (httpCode == HTTP_CODE_OK) {
       String payload = http.getString();
+      http.end();  // ปิด connection ตรงนี้ (เคสอื่น ๆ ที่ล้มเหลว loop retry ข้างบนปิดให้แล้วทุกครั้ง)
       long remoteApiVersion = -1;
       if (loadDefTbFromJson(payload, remoteApiVersion)) {
         Serial.printf("API Success. Active rows: %d | Server api_version: %ld | Local api_version: %ld\n",
                       active_tb_rows, remoteApiVersion, localApiVersion);
 
-        // เซฟลง LittleFS (cache + เลขเวอร์ชัน) เฉพาะตอนที่ server มีเวอร์ชันใหม่กว่าที่มีอยู่เท่านั้น
-        // (RAM/def_tb ใช้ข้อมูลที่เพิ่ง fetch สด ๆ เสมอไม่ว่าเวอร์ชันจะใหม่กว่าหรือไม่)
-        if (remoteApiVersion > localApiVersion) {
-          Serial.println("New config version from server, updating LittleFS cache...");
+        // เซฟลง LittleFS (cache + เลขเวอร์ชัน + dp_name) เมื่อ server มีเวอร์ชันใหม่กว่าที่มีอยู่
+        // หรือย้าย department/process มา (dpChanged) ไม่ว่าเลข version จะสูงกว่าหรือไม่ก็ตาม
+        // *** สำคัญ: ทุกครั้งที่แก้ data ในไฟล์ config บนเซิร์ฟเวอร์ ต้อง bump "api_version" ขึ้นด้วยเสมอ
+        //     ไม่งั้น cache ใน LittleFS (ที่ใช้ fallback ตอน WiFi/API ล่ม) จะไม่ถูกอัปเดตตามของใหม่ ***
+        if (dpChanged || remoteApiVersion > localApiVersion) {
+          Serial.println(dpChanged ? "Department/Process changed, updating LittleFS cache..."
+                                    : "New config version from server, updating LittleFS cache...");
           api_version = String(remoteApiVersion);
           File verFile = LittleFS.open("/api_version.txt", "w");
           if (verFile) {
             verFile.print(api_version);
             verFile.close();
           }
+          File dpFile = LittleFS.open("/dp_name.txt", "w");
+          if (dpFile) {
+            dpFile.print(currentDpKey);
+            dpFile.close();
+          }
           File f = LittleFS.open("/config.json", "w");
           if (f) {
             f.print(payload);
             f.close();
           }
+          // payload ที่เพิ่ง parse ใส่ def_tb ไปแล้วตรงกับ config.json ที่เพิ่งเซฟพอดี ใช้ต่อได้เลย
+          loaded = true;
         } else {
-          Serial.println("Config version not newer than local, cache left unchanged.");
+          // Version ไม่ใหม่กว่า -> ไม่แตะ cache และ "ไม่เชื่อ" payload สดที่เพิ่ง parse ไปแล้วด้วย
+          // (ต่อให้เนื้อหาจริงจะเปลี่ยนไปจากที่ควรเป็นก็ตาม) ต้องโหลด def_tb จาก config.json ที่ cache ไว้แทน
+          // เพื่อให้ "version เท่าเดิม = ค่าที่ใช้งานจริงใน RAM ก็ต้องเท่าเดิม" ตาม Dynamic Config Flow ที่ออกแบบไว้
+          Serial.println("Config version not newer than local; reloading def_tb from existing LittleFS cache...");
+          if (LittleFS.exists("/config.json")) {
+            File f = LittleFS.open("/config.json", "r");
+            if (f) {
+              String cached = f.readString();
+              f.close();
+              long cachedApiVersion = -1;
+              if (loadDefTbFromJson(cached, cachedApiVersion)) {
+                Serial.printf("Loaded from cache. Active rows: %d | Cached api_version: %ld\n", active_tb_rows, cachedApiVersion);
+                loaded = true;
+              } else {
+                Serial.println("Error: Failed to parse cached config.json");
+              }
+            }
+          }
+          if (!loaded) {
+            // Edge case: ยังไม่เคยมี cache มาก่อนเลย (เช่น boot แรกสุดที่ server เริ่มต้นด้วย version เท่ากับ
+            // default ในเครื่อง) ไม่มีอะไรให้ fallback -> ใช้ payload สดที่เพิ่ง fetch ไปก่อน (ดีกว่าไม่มีอะไรเลย)
+            // และเซฟเป็น cache ตั้งต้นไว้เลย เพื่อไม่ให้ค้างสถานะไม่มี cache ซ้ำอีกในบูตถัดไป
+            Serial.println("No existing cache found; bootstrapping cache from live payload instead.");
+            if (loadDefTbFromJson(payload, remoteApiVersion)) {
+              api_version = String(remoteApiVersion);
+              File verFile = LittleFS.open("/api_version.txt", "w");
+              if (verFile) {
+                verFile.print(api_version);
+                verFile.close();
+              }
+              File dpFile = LittleFS.open("/dp_name.txt", "w");
+              if (dpFile) {
+                dpFile.print(currentDpKey);
+                dpFile.close();
+              }
+              File f = LittleFS.open("/config.json", "w");
+              if (f) {
+                f.print(payload);
+                f.close();
+              }
+              loaded = true;
+            }
+          }
         }
-        loaded = true;
       } else {
         Serial.println("Error: Failed to parse API JSON payload");
       }
     } else {
       Serial.println("API Call Failed!");
     }
-    http.end();
   } else {
     Serial.println("Error: WiFi not connected. Cannot call API.");
   }
 
-  if (!loaded) {
+  if (!loaded && dpChanged) {
+    // Cache ที่มีอยู่เป็นของ department/process เดิม (ก่อนย้ายกล่อง) ห้ามใช้ผิด process โดยเด็ดขาด
+    // ยอมไม่มี config ดีกว่าเอา address/type ของ process อื่นมาใช้งานผิด ๆ
+    Serial.println("Error: Department/Process changed but no successful API fetch yet; refusing to fall back to previous process's cache.");
+  } else if (!loaded) {
     Serial.println("Loading fallback config from LittleFS cache...");
     if (LittleFS.exists("/config.json")) {
       File f = LittleFS.open("/config.json", "r");
