@@ -138,7 +138,9 @@ void MicMMS::init() {
   Serial.print("IP address IoT Box: ");
   Serial.println(WiFi.localIP());
   mqttClient.setServer(mqtt_server, mqtt_port);
-  mqttClient.setBufferSize(1024);   // Config the size, in bytes, of the internal send/receive buffer
+  mqttClient.setBufferSize(4096);   // Config the size, in bytes, of the internal send/receive buffer
+  // 4096 = จอง heap แบบ malloc ตอน runtime (ปลอดภัย ไม่ใช่ static บน stack) ตรงกับเพดาน MAX_MQTT_DATA_PAYLOAD_BYTES
+  // ใน Api.py/ui_streamlit.py และ StaticJsonDocument ของ json_1 ใน func1_Task ที่ขยับคู่กันด้านล่าง
   mqttClient.setKeepAlive(30);      // Config Keep-alive 30s
   mqttClient.setSocketTimeout(10);  // Config Socket timeout 10s
   mqttClient.setCallback([this](char* topic, byte* payload, unsigned int length) {
@@ -243,7 +245,10 @@ void MicMMS::func1_Task(void* pvParam) {
     unsigned long long int start = micros();
     bool change_1 = false;
 
-    StaticJsonDocument<300> json_1;  // size = 30*topic [avg]
+    // ขยับจาก 300 -> 4096 ให้พอกับ config ที่มี row type 3/4 (data/lot) เยอะขึ้น ตรงกับเพดาน
+    // mqttClient.setBufferSize(4096) ด้านบน — func1_Task ถูกสร้างด้วย stack 10000 byte
+    // (xTaskCreatePinnedToCore(func1_Task, "Task2", 10000, ...) ใน start()) เหลือ headroom พอสำหรับตัวแปร local อื่น ๆ
+    StaticJsonDocument<4096> json_1;  // size = 30*topic [avg]
     // check data change
     for (int i = 0; i < active_tb_rows; i++) {
       if (def_tb[i][2] == "3" || def_tb[i][2] == "4") {
@@ -562,12 +567,17 @@ void MicMMS::esp_Task(void* pvParam) {
 // ใช้ร่วมกันทั้งตอนโหลดจาก API สด ๆ และตอน fallback จาก cache "/config.json" (โครงสร้างไฟล์เดียวกัน)
 // outApiVersion จะถูกตั้งค่าเป็น api_version ที่อ่านได้ (-1 ถ้าไม่มีฟิลด์นี้), คืน false ถ้า parse ไม่ผ่าน
 bool MicMMS::loadDefTbFromJson(const String& jsonPayload, long& outApiVersion) {
-  // 4096 = พื้นที่ parse ผลลัพธ์ JSON หลังแตกเป็น object/array แล้ว (ไม่ใช่ขนาด jsonPayload ดิบตรง ๆ
-  // เพราะ ArduinoJson เก็บ string ซ้ำ + overhead ต่อ key-value pair เพิ่มด้วย ดังนั้น jsonPayload ดิบ
-  // ที่ parse ผ่านได้จริงจะเล็กกว่า 4096 byte เสมอ) — ค่านี้ผูกกับ callAPI() ที่รันบน stack ของ
-  // setup()/loop() task (default ~8192 byte) เช็คระยะขอบจาก Serial log "callAPI stack remaining"
-  // ด้านล่างทุกครั้งหลัง flash ใหม่ ถ้าเหลือน้อยเกินไปให้ลดตัวเลขนี้ลง
-  StaticJsonDocument<4096> doc;
+  // เปลี่ยนจาก StaticJsonDocument<4096> (พื้นที่คงที่บน stack ของ setup()/loop() task, ~8192 byte
+  // ทั้งก้อน) มาเป็น DynamicJsonDocument (จองบน heap แบบ malloc ตอน runtime) เพื่อ:
+  //   1) ตัดปัญหาเรื่อง stack overflow ออกไปเลย ไม่ต้องคอยเช็ค "callAPI stack remaining" หลัง flash ทุกรอบ
+  //      ที่ขยับตัวเลขนี้อีกต่อไป (heap ของ ESP32-S3 มีเหลือ ~230KB จาก log จริงที่เคยเห็น เทียบกับ stack
+  //      ที่มีให้แค่ ~8KB ทั้ง task)
+  //   2) รองรับ config ก้อนใหญ่ขึ้นได้เยอะกว่าเดิมมาก โดยจองพื้นที่ตาม "ขนาด jsonPayload จริง" ไม่ใช่เลขตายตัว
+  // capacity ประเมินแบบเผื่อเหลือ (ไม่ใช่ raw byte 1:1 เพราะ ArduinoJson มี overhead ต่อ key-value pair
+  // + ก็อปปี้ string ซ้ำเข้าไปเก็บด้วย) คูณ 2 ของ raw length + เผื่อฐาน 1024 byte, เพดานบนกันเหวี่ยง 65536 byte
+  size_t capacity = jsonPayload.length() * 2 + 1024;
+  if (capacity > 65536) capacity = 65536;
+  DynamicJsonDocument doc(capacity);
   DeserializationError error = deserializeJson(doc, jsonPayload);
 
   if (error || !doc.is<JsonObject>() || !doc["data"].is<JsonArray>()) {

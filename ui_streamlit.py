@@ -14,43 +14,12 @@ import streamlit as st
 
 DEFAULT_API_BASE_URL = os.environ.get("CONFIG_API_URL", "http://localhost:8000")
 
-# ต้องตรงกับ MAX_ROWS/MAX_ADDRESS/MAX_PAYLOAD_BYTES/MAX_MQTT_DATA_PAYLOAD_BYTES ใน Api.py
-# (แสดงผลฝั่ง UI ให้ user เห็นก่อนกด submit เพื่อ feedback ไว แต่ตัวที่ "เชื่อได้จริง" คือ backend validate
-# อีกรอบเสมอ เผื่อ UI เพี้ยน/bypass — ดูคอมเมนต์อธิบายความหมายของแต่ละตัวใน Api.py)
+# ต้องตรงกับ MAX_ROWS/MAX_ADDRESS/MAX_PAYLOAD_BYTES ใน Api.py (แสดงผลฝั่ง UI ให้ user เห็นก่อนกด submit
+# เพื่อ feedback ไว แต่ตัวที่ "เชื่อได้จริง" คือ backend validate อีกรอบเสมอ เผื่อ UI เพี้ยน/bypass)
+# หมายเหตุ: ตั้งใจไม่เช็คขนาดข้อความ MQTT topic "data" ที่จะเกิดขึ้นจริงแล้ว (ดูเหตุผลใน Api.py)
 MAX_ROWS = 250
 MAX_ADDRESS = 256
-MAX_PAYLOAD_BYTES = 4096
-MAX_MQTT_DATA_PAYLOAD_BYTES = 1024  # ตรงกับ mqttClient.setBufferSize(1024) จริงใน MicMMS.cpp (ไม่ได้แตะฝั่ง ESP32)
-
-
-def estimate_mqtt_data_payload_bytes(rows: list) -> int:
-    """สำเนาของ estimate_mqtt_data_payload_bytes ใน Api.py — เอาไว้ feedback ฝั่ง UI ก่อนกด submit
-    ต้องแก้พร้อมกันทั้งสองที่ถ้า logic ฝั่ง ESP32 (func1_Task) เปลี่ยน"""
-    FIXED_OVERHEAD = 20
-    RSSI_VALUE_WIDTH = 8
-    TYPE3_VALUE_WIDTH = 5
-    TYPE4_VALUE_WIDTH = 11
-    FIELD_SYNTAX_OVERHEAD = 4
-
-    total = FIXED_OVERHEAD + RSSI_VALUE_WIDTH
-    lot_chars = 0
-    i = 0
-    while i < len(rows):
-        row_type = rows[i].get("Type")
-        name = rows[i].get("Name", "")
-        if row_type == "3":
-            total += len(name) + TYPE3_VALUE_WIDTH + FIELD_SYNTAX_OVERHEAD
-            i += 1
-        elif row_type == "4":
-            total += len(name) + TYPE4_VALUE_WIDTH + FIELD_SYNTAX_OVERHEAD
-            i += 2
-        elif row_type == "5":
-            lot_chars += 2
-            i += 1
-        else:
-            i += 1
-    total += lot_chars
-    return total
+MAX_PAYLOAD_BYTES = 30000  # ESP32 เปลี่ยนไปใช้ DynamicJsonDocument (heap) แล้ว ไม่ติดเพดาน 4096 เดิม
 
 st.set_page_config(page_title="ESP32 Config Manager", layout="wide")
 st.title("ESP32 Config Manager")
@@ -110,8 +79,7 @@ with tab_edit:
 
     st.caption(
         f"ข้อจำกัด: สูงสุด {MAX_ROWS} rows / Address ต้องเป็นตัวเลข 0-{MAX_ADDRESS - 1} / "
-        f"ขนาด config รวมต้องไม่เกิน {MAX_PAYLOAD_BYTES} byte / "
-        f"ข้อความ MQTT topic 'data' ที่จะเกิดขึ้นต้องไม่เกิน {MAX_MQTT_DATA_PAYLOAD_BYTES} byte"
+        f"ขนาด config รวมต้องไม่เกิน {MAX_PAYLOAD_BYTES} byte"
     )
     edited_df = st.data_editor(
         st.session_state["edit_df"],
@@ -144,12 +112,6 @@ with tab_edit:
         payload_size = len(json.dumps({"api_version": 0, "data": rows}, ensure_ascii=False).encode("utf-8"))
         if payload_size >= MAX_PAYLOAD_BYTES:
             problems.append(f"ขนาด config ({payload_size} byte) เกิน {MAX_PAYLOAD_BYTES} byte")
-        mqtt_estimate = estimate_mqtt_data_payload_bytes(rows)
-        if mqtt_estimate >= MAX_MQTT_DATA_PAYLOAD_BYTES:
-            problems.append(
-                f"ข้อความ MQTT topic 'data' ที่จะเกิดขึ้นประมาณ {mqtt_estimate} byte เกิน "
-                f"{MAX_MQTT_DATA_PAYLOAD_BYTES} byte — ESP32 จะไม่ publish ข้อมูลขึ้นเลยถ้าบันทึกแบบนี้"
-            )
 
         if problems:
             for p in problems:

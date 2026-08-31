@@ -1,5 +1,5 @@
 """
-เลเยอร์ DB กลางสำหรับ config (SQLite) — ใช้ร่วมกันระหว่าง Api.py และสคริปต์ migrate/เขียนข้อมูล
+เลเยอร์ DB กลางสำหรับ config (SQLite) — ใช้โดย Api.py (ui_streamlit.py คุยผ่าน HTTP ไปที่ Api.py อีกที ไม่ได้ import ไฟล์นี้ตรงๆ)
 เก็บทุก api_version เป็นประวัติ ไม่มีการ UPDATE ทับของเก่า มีแต่ INSERT แถวใหม่เพิ่มขึ้นเรื่อย ๆ
 """
 import sqlite3
@@ -23,8 +23,8 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set:
 def init_db() -> None:
     """สร้างตารางถ้ายังไม่มี — เรียกได้ซ้ำ ๆ ปลอดภัย (idempotent)
     เรียกตอน Api.py เริ่มทำงาน เพื่อให้ deploy ไปเครื่องใหม่แล้ว schema พร้อมใช้ทันที
-    (ไม่มีไฟล์ .json เป็น source แล้ว — ถ้า config.db ที่ deploy ไปเป็นไฟล์เปล่า ต้องเอาข้อมูลเข้าเอง
-    ผ่าน insert_new_version() หรือ copy ไฟล์ config.db ที่มีข้อมูลอยู่แล้วไปแทนที่)
+    (ไม่มีไฟล์ .json เป็น source แล้ว — ถ้า config.db ที่ deploy ไปเป็นไฟล์เปล่า ต้อง copy ไฟล์
+    config.db ที่มีข้อมูลอยู่แล้วไปแทนที่)
     """
     conn = get_connection()
     try:
@@ -68,22 +68,6 @@ def get_latest_config(div: str, process: str):
             """,
             (div, process),
         ).fetchone()
-    finally:
-        conn.close()
-
-
-def insert_new_version(div: str, process: str, api_version: int, data_json: str, update_time: Optional[str] = None) -> None:
-    """เพิ่ม api_version ใหม่ (ไม่ทับของเก่า) — ถ้า (div, process, api_version) ซ้ำจะ error เพราะมี UNIQUE constraint กันไว้"""
-    conn = get_connection()
-    try:
-        conn.execute(
-            """
-            INSERT INTO config_versions (div, process, api_version, data, update_time)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (div, process, api_version, data_json, update_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-        )
-        conn.commit()
     finally:
         conn.close()
 
