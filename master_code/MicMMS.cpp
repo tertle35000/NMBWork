@@ -198,7 +198,14 @@ void MicMMS::modbus_Task(void* pvParam) {
     //record raw data to table
     unsigned long long int start = micros();
     for (int i = 0; i < active_tb_rows; i++) {
-      def_tb[i][3] = got_data[(def_tb[i][1].toInt()) - 1];
+      // เช็คขอบเขตก่อนอ่าน got_data[] เสมอ — Address ต้องอยู่ในช่วง 1..num_got_data (180) เท่านั้น
+      // (index จริงคือ Address-1 => 0..num_got_data-1) ถ้าปล่อยให้อ่านเกินขอบ (Address=0 หรือ > 180)
+      // จะเป็นการอ่านหน่วยความจำนอก array (undefined behavior) ได้ค่าเลอะที่ดูเหมือนข้อมูลจริงแต่ไม่ใช่เลย
+      int addr = def_tb[i][1].toInt();
+      if (addr >= 1 && addr <= num_got_data) {
+        def_tb[i][3] = got_data[addr - 1];
+      }
+      // Address นอกช่วง -> ปล่อย def_tb[i][3] ไว้เหมือนเดิม (ไม่อัปเดต) แทนที่จะอ่านค่าเลอะ
     }
     // for (int i = 43; i < 55; i++) {
     //   Serial.print(got_data[i]);
@@ -465,7 +472,13 @@ void MicMMS::broke_modbus_Task(void* pvParam) {
       json_4["broker"] = bkr_connect;
       json_4["modbus"] = modb_check;           // Modbus Ethernet
       json_4["version"] = vrs_Code->vrs_code;  // code version
-      json_4["api_version"] = api_version;     // config version (LittleFS "/api_version.txt")
+      // ถ้า callAPI() หา config มาใช้ไม่ได้เลยสักทาง (hasValidConfig=false) publish เป็น null แทน
+      // เพราะเลขเก่าใน api_version ที่ค้างอยู่ไม่ได้แปลว่า config version นั้นยังใช้งานได้จริงตอนนี้
+      if (hasValidConfig) {
+        json_4["api_version"] = api_version;   // config version (LittleFS "/api_version.txt")
+      } else {
+        json_4["api_version"] = nullptr;
+      }
       serializeJson(json_4, json_topic4);
       instance->publishMessage(topic_pub, json_topic4.c_str());
       Serial.println(json_topic4);
@@ -567,14 +580,7 @@ void MicMMS::esp_Task(void* pvParam) {
 // ใช้ร่วมกันทั้งตอนโหลดจาก API สด ๆ และตอน fallback จาก cache "/config.json" (โครงสร้างไฟล์เดียวกัน)
 // outApiVersion จะถูกตั้งค่าเป็น api_version ที่อ่านได้ (-1 ถ้าไม่มีฟิลด์นี้), คืน false ถ้า parse ไม่ผ่าน
 bool MicMMS::loadDefTbFromJson(const String& jsonPayload, long& outApiVersion) {
-  // เปลี่ยนจาก StaticJsonDocument<4096> (พื้นที่คงที่บน stack ของ setup()/loop() task, ~8192 byte
-  // ทั้งก้อน) มาเป็น DynamicJsonDocument (จองบน heap แบบ malloc ตอน runtime) เพื่อ:
-  //   1) ตัดปัญหาเรื่อง stack overflow ออกไปเลย ไม่ต้องคอยเช็ค "callAPI stack remaining" หลัง flash ทุกรอบ
-  //      ที่ขยับตัวเลขนี้อีกต่อไป (heap ของ ESP32-S3 มีเหลือ ~230KB จาก log จริงที่เคยเห็น เทียบกับ stack
-  //      ที่มีให้แค่ ~8KB ทั้ง task)
-  //   2) รองรับ config ก้อนใหญ่ขึ้นได้เยอะกว่าเดิมมาก โดยจองพื้นที่ตาม "ขนาด jsonPayload จริง" ไม่ใช่เลขตายตัว
-  // capacity ประเมินแบบเผื่อเหลือ (ไม่ใช่ raw byte 1:1 เพราะ ArduinoJson มี overhead ต่อ key-value pair
-  // + ก็อปปี้ string ซ้ำเข้าไปเก็บด้วย) คูณ 2 ของ raw length + เผื่อฐาน 1024 byte, เพดานบนกันเหวี่ยง 65536 byte
+
   size_t capacity = jsonPayload.length() * 2 + 1024;
   if (capacity > 65536) capacity = 65536;
   DynamicJsonDocument doc(capacity);
@@ -599,6 +605,25 @@ bool MicMMS::loadDefTbFromJson(const String& jsonPayload, long& outApiVersion) {
   }
   active_tb_rows = row;  // อัปเดตจำนวนแถวปัจจุบัน
   return true;
+}
+
+// สลับกระพริบ Pinled1 <-> Pinled2 (ไฟวิ่ง) cycles รอบ (1 รอบ = Pinled1 1 ครั้ง + Pinled2 1 ครั้ง)
+// ใช้เป็นรหัสบอกผลลัพธ์ของ callAPI() ตอนบูตเท่านั้น: เรียกก่อน start() สร้าง task เสมอ จึงไม่มี task ไหน
+// มาแย่งเขียนพินพร้อมกัน (ต่างจากตอน runtime ปกติที่ Pinled1/Pinled2 มีความหมายอื่นอยู่แล้ว)
+void MicMMS::blinkBootConfigStatus(int cycles) {
+  for (int i = 0; i < cycles; i++) {
+    digitalWrite(Pinled1, HIGH);
+    delay(200);
+    digitalWrite(Pinled1, LOW);
+    delay(200);
+    digitalWrite(Pinled2, HIGH);
+    delay(200);
+    digitalWrite(Pinled2, LOW);
+    delay(200);
+  }
+  delay(800);  // เว้นจังหวะปิดท้าย บอกว่าจบชุดกระพริบแล้ว
+  // คืน Pinled2 กลับสถานะจริงของ WiFi ตอนนี้ (ไม่ใช่เดา HIGH เสมอ เพราะบางเคส callAPI() ก็รันได้ทั้งที่ WiFi ไม่ติด)
+  digitalWrite(Pinled2, (WiFi.status() == WL_CONNECTED) ? HIGH : LOW);
 }
 
 void MicMMS::callAPI() {
@@ -659,7 +684,7 @@ void MicMMS::callAPI() {
   }
   // หมายเหตุ: ถ้ายังไม่เคยมี /dp_name.txt เลย (cachedDpKey == "") ให้ถือว่า "ไม่รู้ว่า cache เดิมเป็นของ
   // process ไหน" แล้วบังคับ dpChanged = true ไปเลย (ไม่ใช่ปล่อยผ่านว่าเหมือนเดิม) เพราะ /dp_name.txt จะถูกเขียน
-  // ก็ต่อเมื่อเข้าเงื่อนไขนี้เท่านั้น -- ถ้าปล่อยผ่านจะกลายเป็นไก่กับไข่: ไม่มีไฟล์ทำให้ไม่ trigger, ไม่ trigger ทำให้ไม่มีไฟล์ตลอดไป
+  // ก็ต่อเมื่อเข้าเงื่อนไขนี้เท่านั้น
   bool dpChanged = (cachedDpKey != currentDpKey);
   if (dpChanged) {
     if (cachedDpKey.length() == 0) {
@@ -673,7 +698,7 @@ void MicMMS::callAPI() {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
 
-    // *** ใส่ URL ของ FastAPI ตรงนี้ครับ ***
+    // *** ใส่ URL ของ FastAPI ตรงนี้ ***
     String apiUrl = "http://192.168.0.204:8000/api/config/" + department + "/" + process + "?mac=" + WiFi.macAddress();
     Serial.printf("API URL: %s\n", apiUrl.c_str());
 
@@ -795,6 +820,7 @@ void MicMMS::callAPI() {
         if (loadDefTbFromJson(cached, cachedApiVersion)) {
           Serial.printf("Fallback Load Success. Active rows: %d | Cached api_version: %ld\n", active_tb_rows, cachedApiVersion);
           loaded = true;
+          // blinkBootConfigStatus(2);  // เตือน: ใช้ config เก่าจาก cache (API/WiFi มีปัญหา)
         } else {
           Serial.println("Error: Failed to parse cached config.json");
         }
@@ -806,6 +832,8 @@ void MicMMS::callAPI() {
 
   if (!loaded) {
     Serial.println("Error: No config loaded (API failed and no cache). active_tb_rows = 0");
+    hasValidConfig = false;  // บอก broke_modbus_Task ให้ publish api_version เป็น null แทนเลขเก่าที่ค้างอยู่
+    // blinkBootConfigStatus(5);  // เตือน: ไม่มี config ให้ใช้เลยสักตัว (วิกฤต)
   }
 
   // --- เพิ่มโค้ดพรินต์ตรวจสอบตรงนี้ ---
@@ -838,8 +866,7 @@ void MicMMS::callAPI() {
   Serial.printf("callAPI free heap after: %u bytes\n", freeHeapAfter);
   Serial.printf("callAPI minimum free heap: %u bytes\n", minFreeHeapAfter);
   // ค่านี้คือระยะขอบ stack ที่เหลือ "แย่ที่สุดเท่าที่เคยเหลือ" ของ task นี้ตั้งแต่เริ่มรัน (ไม่ใช่แค่ตอน
-  // callAPI() นี้อย่างเดียว) ถ้าเลขนี้ใกล้ 0 แปลว่า StaticJsonDocument<4096> ใน loadDefTbFromJson()
-  // เสี่ยง stack overflow ให้ลดขนาดลง (ดูคอมเมนต์ที่ตัวแปร doc)
+  // callAPI() นี้อย่างเดียว)
   Serial.printf("callAPI stack remaining (worst-case since boot): %u bytes\n", stackWatermarkAfter * sizeof(StackType_t));
   Serial.println("--- End Dynamic Config Flow ---");
 }

@@ -48,6 +48,7 @@ public:
 private:
   // parse JSON { "api_version": N, "data": [...] } -> def_tb/active_tb_rows, เซ็ต outApiVersion, คืน false ถ้า parse ไม่ผ่าน
   bool loadDefTbFromJson(const String& jsonPayload, long& outApiVersion);
+  void blinkBootConfigStatus(int cycles);
 public:
   static void modbus_Task(void* pvParam);
   static void Network_Task(void* pvParam);

@@ -4,3 +4,4 @@ pydantic==2.13.4
 streamlit==1.62.0
 pandas==3.0.5
 requests==2.34.2
+bcrypt==5.0.0

@@ -105,3 +105,40 @@ def list_departments_processes():
         return [(r["div"], r["process"]) for r in rows]
     finally:
         conn.close()
+
+
+def list_config_versions(div: str, process: str):
+    """คืนทุก api_version ของ div/process นั้น (ใหม่สุดก่อน) พร้อม update_time — ใช้โชว์ history tab
+    ไม่ดึงคอลัมน์ data มาด้วย (อาจมีหลายร้อย row ต่อ version) เพื่อให้ list เบา ใครอยากดูเนื้อหาจริงค่อยเรียก
+    get_config_version() ต่อเฉพาะ version ที่สนใจ
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT api_version, update_time FROM config_versions
+            WHERE div = ? AND process = ?
+            ORDER BY api_version DESC
+            """,
+            (div, process),
+        ).fetchall()
+        return [{"api_version": r["api_version"], "update_time": r["update_time"]} for r in rows]
+    finally:
+        conn.close()
+
+
+def get_config_version(div: str, process: str, api_version: int):
+    """คืน sqlite3.Row (api_version, data, update_time) ของ api_version ที่ระบุเจาะจง หรือ None ถ้าไม่เจอ
+    ต่างจาก get_latest_config() ตรงที่เจาะจง version แทนที่จะเอาล่าสุดเสมอ — ใช้เปิดดู/rollback ไป version เก่า
+    """
+    conn = get_connection()
+    try:
+        return conn.execute(
+            """
+            SELECT api_version, data, update_time FROM config_versions
+            WHERE div = ? AND process = ? AND api_version = ?
+            """,
+            (div, process, api_version),
+        ).fetchone()
+    finally:
+        conn.close()

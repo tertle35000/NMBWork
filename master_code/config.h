@@ -40,7 +40,10 @@ const uint16_t itr_network = 5000;  // ms  5s
 const uint16_t itr_bro_mod = 5000;  // ms
 
 /*--------- Variable config ---------*/
-const uint8_t num_got_data = 180;
+// จำนวนช่อง Modbus register ที่โพลได้ / เพดาน Address สูงสุดที่ config.h อนุญาต (1..num_got_data)
+// modbus_Task ใน MicMMS.cpp เอา Address ไปทำ index ตรง ๆ (got_data[Address-1]) — เปลี่ยนตัวเลขนี้แล้วต้อง
+// เปลี่ยน MIN_ADDRESS/MAX_ADDRESS ใน Api.py/ui_streamlit.py ให้ตรงกันด้วยเสมอ (255 พอดีกับ uint8_t ไม่ต้องเปลี่ยน type)
+const uint8_t num_got_data = 255;
 uint16_t got_data[num_got_data];
 int count_mb_check = 0;  // Check the receipt of data from GOT
 
@@ -53,6 +56,10 @@ String prv_alarm, alarm_;
 String Lot_ttl;
 String Rx_datasub;
 String api_version = "1";  // Config version (separate from firmware vrs_code), persisted in LittleFS "/api_version.txt"
+// true ตลอดยกเว้น callAPI() หาข้อมูล config ไม่ได้เลยสักทาง (API ล่ม + ไม่มี cache ให้ fallback หรือ
+// ปฏิเสธ fallback เพราะย้าย department/process มา) — ใช้บอก broke_modbus_Task ว่าควร publish
+// api_version เป็น null แทนเลขเก่าที่ค้างอยู่ (เลขเก่าไม่ได้แปลว่า config ตัวนั้นยังใช้งานได้จริง)
+bool hasValidConfig = true;
 unsigned long long prv_time = 0;
 unsigned long long prv_time_1 = 0;
 unsigned long long prv_time_2 = 0;
